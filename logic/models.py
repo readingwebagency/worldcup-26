@@ -22,9 +22,9 @@ class Group:
         self.points = {team.name: 0 for team in teams}
 
     def update_points(self, team_a, team_b, outcome):
-        if outcome == "home":
+        if outcome == team_a.name:
             self.points[team_a.name] += 3
-        elif outcome == "away":
+        elif outcome == team_b.name:
             self.points[team_b.name] += 3
         else:  # draw
             self.points[team_a.name] += 1
