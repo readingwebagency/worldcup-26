@@ -1,24 +1,30 @@
 import random
-from logic.elo import outcome_probs, update_elo
 
-def simulate_match(team_a, ri, team_b, rj, draw_rate=0.28, k=40):
-    p_win, p_draw, p_loss = outcome_probs(ri, rj, draw_rate)
+def simulate_match(team_1, team_2, lookup_table, is_knockout=False):
+    # 1. Ensure keys match the alphabetical lookup structure
+    team_a, team_b = sorted([team_1, team_2])
+    
+    # 2. Instant O(1) Memory Lookup
+    p_win_a, p_draw, p_win_b = lookup_table[(team_a, team_b)]
+    
     r = random.random()
-
-    if r < p_win:
-        w_a, w_b = 1, 0
-    elif r < p_win + p_draw:
-        w_a, w_b = 0.5, 0.5
+    
+    # 3. Resolve Group Stage Matches (Draws allowed)
+    if not is_knockout:
+        if r < p_win_a:
+            return {"winner": team_a, "points": (3, 0), "type": "win"}
+        elif r < p_win_a + p_draw:
+            return {"winner": "draw", "points": (1, 1), "type": "draw"}
+        else:
+            return {"winner": team_b, "points": (0, 3), "type": "win"}
+            
+    # 4. Resolve Knockout Stage Matches (No Draws allowed)
     else:
-        w_a, w_b = 0, 1
-
-    #taken from eloratings.net/about
-    we_a = p_win + (0.5 * p_draw)
-    new_ri = update_elo(ri, k, w_a, we_a)
-    new_rj = update_elo(rj, k, w_b, 1 - we_a)
-
-    return {
-        "winner": team_a if w_a == 1 else (team_b if w_b == 1 else "draw"),
-        "scores": (w_a, w_b),
-        "new_ratings": {team_a: new_ri, team_b: new_rj}
-    }
+        # Re-weight probabilities to exclude the draw
+        total_win_prob = p_win_a + p_win_b
+        p_knockout_a = p_win_a / total_win_prob
+        
+        if r < p_knockout_a:
+            return {"winner": team_a, "type": "knockout_win"}
+        else:
+            return {"winner": team_b, "type": "knockout_win"}
