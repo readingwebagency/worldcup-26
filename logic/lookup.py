@@ -1,5 +1,5 @@
 import json
-from elo import outcome_probs
+from logic.elo import outcome_probs
 
 HOME_ADVANTAGE = 100  # Standard Elo boost given to host nations
 
