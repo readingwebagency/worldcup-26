@@ -12,11 +12,18 @@ def simulate_match(team_1, team_2, lookup_table, is_knockout=False):
     # 3. Resolve Group Stage Matches (Draws allowed)
     if not is_knockout:
         if r < p_win_a:
-            return {"winner": team_a, "points": (3, 0), "type": "win"}
+            winner = team_a
+            # Dynamically assign points based on original argument order
+            points = (3, 0) if winner == team_1 else (0, 3)
+            return {"winner": winner, "points": points, "type": "win"}
+            
         elif r < p_win_a + p_draw:
             return {"winner": "draw", "points": (1, 1), "type": "draw"}
+            
         else:
-            return {"winner": team_b, "points": (0, 3), "type": "win"}
+            winner = team_b
+            points = (3, 0) if winner == team_1 else (0, 3)
+            return {"winner": winner, "points": points, "type": "win"}
             
     # 4. Resolve Knockout Stage Matches (No Draws allowed)
     else:

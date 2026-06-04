@@ -19,3 +19,5 @@ Thumbs.db
 
 # Data / output (optional - remove if you want to track these)
 # data/state.json
+
+data/lookup_table.json
