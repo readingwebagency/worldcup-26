@@ -142,14 +142,16 @@ def calculate_group_position_matrix(group_letter, iterations=10000, groups_path=
 
 def simulate_tournament_once_to_champion(groups_path, fixtures_path, lookup_table, teams_elo):
     """
-    Runs an entirely localized tournament timeline string loop up to a single winner.
+    Runs an entirely localized tournament timeline simulation using realistic 
+    FIFA 48-team knockout mapping grids up to a single winner.
     """
     with open(groups_path, 'r') as f:
         groups = json.load(f)
     with open(fixtures_path, 'r') as f:
         fixtures = json.load(f)
         
-    next_round_teams = []
+    winners = {}
+    runners_up = {}
     third_place_pool = []
     
     # 1. Run the 12 Groups
@@ -159,44 +161,102 @@ def simulate_tournament_once_to_champion(groups_path, fixtures_path, lookup_tabl
         
         standings = simulate_single_group_stage(group["teams"], group_fixtures, lookup_table, teams_elo)
         
-        # Keep group winners and runners up cleanly
-        next_round_teams.append(standings[0][0])
-        next_round_teams.append(standings[1][0])
+        # Pull exact winners and runners up
+        winners[letter] = standings[0][0]
+        runners_up[letter] = standings[1][0]
         
-        # Capture the 3rd place row data: (Team Name, Points, GD)
+        # Capture the 3rd place row data for wildcard sorting
         third_team, third_pts, third_gd = standings[2]
         third_place_pool.append({
             "team": third_team,
+            "group": letter,
             "points": third_pts,
-            "gd": third_gd,
-            "elo": teams_elo.get(third_team, 0)
+            "gd": third_gd
         })
         
-    # 2. Sort global 3rd-place pool by Points, then Goal Difference, then Elo rating
+    # 2. Sort global 3rd-place pool by Points, then Goal Difference, then a random tiebreaker
+    # (Replacing ELO with a random float mimics real-world drawing of lots / fair play points)
     sorted_wildcards = sorted(
         third_place_pool,
-        key=lambda x: (x["points"], x["gd"], x["elo"]),
+        key=lambda x: (x["points"], x["gd"], random.random()),
         reverse=True
     )
     
-    # Grab the top 8 survivors
-    for wildcard in sorted_wildcards[:8]:
-        next_round_teams.append(wildcard["team"])
-        
-    # 3. Simulate knockout single elimination brackets
-    current_round_pairs = list(zip(next_round_teams[0::2], next_round_teams[1::2]))
+    # Extract top 8 wildcard teams 
+    top_8_wildcards = sorted_wildcards[:8]
     
-    while len(current_round_pairs) > 1:
+    # 3. Build the official Left-Side vs Right-Side Round of 32 Slots
+    # This prevents group winners from hitting runners up from their own group immediately.
+    r32_teams = [None] * 32
+    
+    # --- LEFT SIDE BRACKET (Slots 0 to 15) ---
+    r32_teams[0]  = winners["A"]
+    r32_teams[1]  = runners_up["B"]
+    r32_teams[2]  = winners["C"]
+    r32_teams[3]  = runners_up["D"]
+    r32_teams[4]  = winners["E"]
+    r32_teams[5]  = runners_up["F"]
+    r32_teams[6]  = winners["G"]
+    r32_teams[7]  = runners_up["H"]
+    r32_teams[8]  = winners["I"]
+    r32_teams[9]  = runners_up["J"]
+    r32_teams[10] = winners["K"]
+    r32_teams[11] = runners_up["L"]
+    
+    # --- RIGHT SIDE BRACKET (Slots 16 to 31) ---
+    r32_teams[16] = winners["B"]
+    r32_teams[17] = runners_up["A"]
+    r32_teams[18] = winners["D"]
+    r32_teams[19] = runners_up["C"]
+    r32_teams[20] = winners["F"]
+    r32_teams[21] = runners_up["E"]
+    r32_teams[22] = winners["H"]
+    r32_teams[23] = runners_up["G"]
+    r32_teams[24] = winners["J"]
+    r32_teams[25] = runners_up["I"]
+    r32_teams[26] = winners["L"]
+    r32_teams[27] = runners_up["K"]
+    
+    # --- ALLOCATE THE 8 WILDCARDS DYNAMICALLY INTO THE REMAINING BLANK SLOTS ---
+    # Left slots reserved for wildcards: 12, 13, 14, 15
+    # Right slots reserved for wildcards: 28, 29, 30, 31
+    left_wildcard_slots = [12, 13, 14, 15]
+    right_wildcard_slots = [28, 29, 30, 31]
+    
+    # Distribute wildcards while attempting to avoid putting a wildcard back on its own group winner's side
+    for team_info in top_8_wildcards:
+        team = team_info["team"]
+        g_letter = team_info["group"]
+        
+        # If group came from right side, try to put them on left side bracket first
+        if g_letter in ["B", "D", "F", "H", "J", "L"] and left_wildcard_slots:
+            slot = left_wildcard_slots.pop(0)
+            r32_teams[slot] = team
+        elif right_wildcard_slots:
+            slot = right_wildcard_slots.pop(0)
+            r32_teams[slot] = team
+        else:
+            # Fallback fill
+            slot = left_wildcard_slots.pop(0) if left_wildcard_slots else right_wildcard_slots.pop(0)
+            r32_teams[slot] = team
+
+    # 4. Run the Knockout Tournament Structure tree sequentially
+    # Every pair is sequential: (0 vs 1), (2 vs 3)... up to (30 vs 31)
+    current_round_teams = r32_teams
+    
+    while len(current_round_teams) > 1:
         next_round_teams = []
-        for match_up in current_round_pairs:
-            t1, t2 = match_up
+        # Zip pairs together step by step
+        for i in range(0, len(current_round_teams), 2):
+            t1 = current_round_teams[i]
+            t2 = current_round_teams[i+1]
+            
             res = simulate_match(t1, t2, lookup_table, is_knockout=True)
             next_round_teams.append(res["winner"])
             
-        current_round_pairs = list(zip(next_round_teams[0::2], next_round_teams[1::2]))
+        current_round_teams = next_round_teams
         
-    final_res = simulate_match(current_round_pairs[0][0], current_round_pairs[0][1], lookup_table, is_knockout=True)
-    return final_res["winner"]
+    return current_round_teams[0]
 
 
 def simulate_full_tournament_n_times(iterations=5000, groups_path="data/groups.json", fixtures_path="data/fixtures.json", lookup_path="data/lookup_table.json", teams_path="data/teams.json"):
@@ -238,7 +298,7 @@ def simulate_full_tournament_n_times(iterations=5000, groups_path="data/groups.j
             
         sorted_wildcards = sorted(
             third_place_pool,
-            key=lambda x: (x["points"], x["gd"], x["elo"]),
+            key=lambda x: (x["points"], x["gd"], random.random()),
             reverse=True
         )
         
@@ -302,7 +362,7 @@ def simulate_group_stage_and_show_wildcards(groups_path="data/groups.json", fixt
         
     sorted_wildcards = sorted(
         third_place_pool,
-        key=lambda x: (x["points"], x["gd"], x["elo"]),
+        key=lambda x: (x["points"], x["gd"], random.random()),
         reverse=True
     )
     
