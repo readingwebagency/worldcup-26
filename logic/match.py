@@ -38,10 +38,16 @@ def simulate_match(team_1, team_2, lookup_table, is_knockout=False):
             
     # 4. Resolve Knockout Stage Matches (No Draws allowed)
     else:
-        total_win_prob = p_win_a + p_win_b
-        p_knockout_a = p_win_a / total_win_prob
-        
-        if r < p_knockout_a:
-            return {"winner": team_a}
+        if r < p_win_a:
+            # r is between 0.0 and p_win_a
+            return {"winner": team_a, "type": "regulation_win"}
+            
+        elif r < (p_win_a + p_draw):
+            # r is between p_win_a and (p_win_a + p_draw)
+            # 🎯 Penalty Shootout Lottery: True 50/50 fair coin flip
+            winner = random.choice([team_1, team_2])
+            return {"winner": winner, "type": "penalty_draw"}
+            
         else:
-            return {"winner": team_b}
+            # r is between (p_win_a + p_draw) and 1.0
+            return {"winner": team_b, "type": "regulation_win"}

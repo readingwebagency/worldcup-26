@@ -31,6 +31,25 @@ def load_simulation_data(groups_path, fixtures_path, lookup_path, teams_path=Non
     return groups, fixtures, lookup_table, teams_elo
 
 
+def get_group_fixtures(fixtures, group_letter):
+    """
+    Helper to filter and extract fixtures belonging to a specific group.
+    """
+    return [m for m in fixtures if m["group"].upper() == group_letter.upper()]
+
+
+def rank_wildcards(third_place_pool):
+    """
+    Centralized sorting engine for the 3rd-place global wildcard pool.
+    Sorts by Points, then Simulated GD, then a random tiebreaker.
+    """
+    return sorted(
+        third_place_pool,
+        key=lambda x: (x["points"], x["gd"], random.random()),
+        reverse=True
+    )
+
+
 def simulate_single_group_stage(group_teams, group_fixtures, lookup_table, teams_elo):
     """
     Simulates matches for a single group and returns an ordered list of 
@@ -51,14 +70,12 @@ def simulate_single_group_stage(group_teams, group_fixtures, lookup_table, teams
         gd_table[match["away"]] += res["gd"][1]
         
     # Python Timsort preserves order if keys match. We sort inversely on all metrics.
-    # Sorting key Tuple layout: (Points, Goal Difference, Baseline Elo)
     sorted_standings = sorted(
         group_teams,
         key=lambda team: (points_table[team], gd_table[team], teams_elo.get(team, 0)),
         reverse=True
     )
     
-    # Return array appending the simulated GD value for wildcard evaluation downstream
     return [(team, points_table[team], gd_table[team]) for team in sorted_standings]
 
 
@@ -76,7 +93,7 @@ def get_group_fixture_probabilities(group_letter, groups_path="data/groups.json"
     if not target_group:
         raise ValueError(f"Group '{group_letter}' not found in configuration files.")
         
-    group_fixtures = [m for m in fixtures if m["group"].upper() == group_letter.upper()]
+    group_fixtures = get_group_fixtures(fixtures, group_letter)
     results = []
     
     for match in group_fixtures:
@@ -96,7 +113,7 @@ def get_group_fixture_probabilities(group_letter, groups_path="data/groups.json"
 
 def simulate_single_group_once(group_letter, groups_path="data/groups.json", fixtures_path="data/fixtures.json", lookup_path="data/lookup_table.json", teams_path="data/teams.json"):
     """
-    Simulates a single group stage exactly once and returns the finalized standings dictionary.
+    Simulates a single group stage exactly once and returns the finalized standings list.
     """
     groups, fixtures, lookup_table, teams_elo = load_simulation_data(groups_path, fixtures_path, lookup_path, teams_path)
     
@@ -104,8 +121,8 @@ def simulate_single_group_once(group_letter, groups_path="data/groups.json", fix
     if not target_group:
         raise ValueError(f"Group '{group_letter}' not found.")
         
-    group_fixtures = [m for m in fixtures if m["group"].upper() == group_letter.upper()]
-    return simulate_group_stage_and_show_wildcards(groups_path, fixtures_path, lookup_path, teams_path)
+    group_fixtures = get_group_fixtures(fixtures, group_letter)
+    return simulate_single_group_stage(target_group["teams"], group_fixtures, lookup_table, teams_elo)
 
 
 def calculate_group_position_matrix(group_letter, iterations=10000, groups_path="data/groups.json", fixtures_path="data/fixtures.json", lookup_path="data/lookup_table.json", teams_path="data/teams.json"):
@@ -119,7 +136,7 @@ def calculate_group_position_matrix(group_letter, iterations=10000, groups_path=
         raise ValueError(f"Group '{group_letter}' not found.")
         
     group_teams = target_group["teams"]
-    group_fixtures = [m for m in fixtures if m["group"].upper() == group_letter.upper()]
+    group_fixtures = get_group_fixtures(fixtures, group_letter)
     
     matrix = {team: {1: 0, 2: 0, 3: 0, 4: 0} for team in group_teams}
     
@@ -157,7 +174,7 @@ def simulate_tournament_once_to_champion(groups_path, fixtures_path, lookup_tabl
     # 1. Run the 12 Groups
     for group in groups:
         letter = group["name"].upper()
-        group_fixtures = [m for m in fixtures if m["group"].upper() == letter]
+        group_fixtures = get_group_fixtures(fixtures, letter)
         
         standings = simulate_single_group_stage(group["teams"], group_fixtures, lookup_table, teams_elo)
         
@@ -174,19 +191,11 @@ def simulate_tournament_once_to_champion(groups_path, fixtures_path, lookup_tabl
             "gd": third_gd
         })
         
-    # 2. Sort global 3rd-place pool by Points, then Goal Difference, then a random tiebreaker
-    # (Replacing ELO with a random float mimics real-world drawing of lots / fair play points)
-    sorted_wildcards = sorted(
-        third_place_pool,
-        key=lambda x: (x["points"], x["gd"], random.random()),
-        reverse=True
-    )
-    
-    # Extract top 8 wildcard teams 
+    # 2. Sort global 3rd-place pool using centralized helper
+    sorted_wildcards = rank_wildcards(third_place_pool)
     top_8_wildcards = sorted_wildcards[:8]
     
     # 3. Build the official Left-Side vs Right-Side Round of 32 Slots
-    # This prevents group winners from hitting runners up from their own group immediately.
     r32_teams = [None] * 32
     
     # --- LEFT SIDE BRACKET (Slots 0 to 15) ---
@@ -218,17 +227,13 @@ def simulate_tournament_once_to_champion(groups_path, fixtures_path, lookup_tabl
     r32_teams[27] = runners_up["K"]
     
     # --- ALLOCATE THE 8 WILDCARDS DYNAMICALLY INTO THE REMAINING BLANK SLOTS ---
-    # Left slots reserved for wildcards: 12, 13, 14, 15
-    # Right slots reserved for wildcards: 28, 29, 30, 31
     left_wildcard_slots = [12, 13, 14, 15]
     right_wildcard_slots = [28, 29, 30, 31]
     
-    # Distribute wildcards while attempting to avoid putting a wildcard back on its own group winner's side
     for team_info in top_8_wildcards:
         team = team_info["team"]
         g_letter = team_info["group"]
         
-        # If group came from right side, try to put them on left side bracket first
         if g_letter in ["B", "D", "F", "H", "J", "L"] and left_wildcard_slots:
             slot = left_wildcard_slots.pop(0)
             r32_teams[slot] = team
@@ -236,17 +241,14 @@ def simulate_tournament_once_to_champion(groups_path, fixtures_path, lookup_tabl
             slot = right_wildcard_slots.pop(0)
             r32_teams[slot] = team
         else:
-            # Fallback fill
             slot = left_wildcard_slots.pop(0) if left_wildcard_slots else right_wildcard_slots.pop(0)
             r32_teams[slot] = team
 
     # 4. Run the Knockout Tournament Structure tree sequentially
-    # Every pair is sequential: (0 vs 1), (2 vs 3)... up to (30 vs 31)
     current_round_teams = r32_teams
     
     while len(current_round_teams) > 1:
         next_round_teams = []
-        # Zip pairs together step by step
         for i in range(0, len(current_round_teams), 2):
             t1 = current_round_teams[i]
             t2 = current_round_teams[i+1]
@@ -281,7 +283,7 @@ def simulate_full_tournament_n_times(iterations=5000, groups_path="data/groups.j
         
         for group in groups:
             letter = group["name"].upper()
-            group_fixtures = [m for m in fixtures if m["group"].upper() == letter]
+            group_fixtures = get_group_fixtures(fixtures, letter)
             
             standings = simulate_single_group_stage(group["teams"], group_fixtures, lookup_table, teams_elo)
             
@@ -292,15 +294,10 @@ def simulate_full_tournament_n_times(iterations=5000, groups_path="data/groups.j
             third_place_pool.append({
                 "team": third_team,
                 "points": third_pts,
-                "gd": third_gd,
-                "elo": teams_elo.get(third_team, 0)
+                "gd": third_gd
             })
             
-        sorted_wildcards = sorted(
-            third_place_pool,
-            key=lambda x: (x["points"], x["gd"], random.random()),
-            reverse=True
-        )
+        sorted_wildcards = rank_wildcards(third_place_pool)
         
         for wildcard in sorted_wildcards[:8]:
             next_round_teams.append(wildcard["team"])
@@ -308,15 +305,13 @@ def simulate_full_tournament_n_times(iterations=5000, groups_path="data/groups.j
         for qualified_team in next_round_teams:
             advancement_counts[qualified_team] += 1
             
-    # Convert absolute counts to float ratios
     return {team: (count / iterations) * 100 for team, count in advancement_counts.items()}
 
 
-def simulate_world_champion_probabilities(iterations=5000, groups_path="data/groups.json", fixtures_path="data/fixtures.json", lookup_path="data/lookup_path.json", teams_path="data/teams.json"):
+def simulate_world_champion_probabilities(iterations=5000, groups_path="data/groups.json", fixtures_path="data/fixtures.json", lookup_path="data/lookup_table.json", teams_path="data/teams.json"):
     """
     Runs full Monte Carlo tournament loops to calculate the ultimate championship odds.
     """
-    # Quick fix for lookup mapping resolution inside load_simulation_data wrapper
     if "lookup_path.json" in lookup_path: 
         lookup_path = "data/lookup_table.json"
         
@@ -335,7 +330,7 @@ def simulate_world_champion_probabilities(iterations=5000, groups_path="data/gro
         champ = simulate_tournament_once_to_champion(groups_path, fixtures_path, lookup_table, teams_elo)
         champion_counts[champ] += 1
         
-    return {team: (count / iterations) * 100 for team, count in champion_counts.items() if count > 0}
+    return {team: (count / iterations) * 100 for team, count in champion_counts.items()}
 
 
 def simulate_group_stage_and_show_wildcards(groups_path="data/groups.json", fixtures_path="data/fixtures.json", lookup_path="data/lookup_table.json", teams_path="data/teams.json"):
@@ -348,7 +343,7 @@ def simulate_group_stage_and_show_wildcards(groups_path="data/groups.json", fixt
 
     for group in groups:
         letter = group["name"].upper()
-        fixtures = [m for m in all_fixtures if m["group"].upper() == letter]
+        fixtures = get_group_fixtures(all_fixtures, letter)
         standings = simulate_single_group_stage(group["teams"], fixtures, lookup_table, teams_elo)
         
         third_team, third_pts, third_gd = standings[2]
@@ -356,15 +351,10 @@ def simulate_group_stage_and_show_wildcards(groups_path="data/groups.json", fixt
             "team": third_team,
             "group": letter,
             "points": third_pts,
-            "gd": third_gd,
-            "elo": teams_elo.get(third_team, 0)
+            "gd": third_gd
         })
         
-    sorted_wildcards = sorted(
-        third_place_pool,
-        key=lambda x: (x["points"], x["gd"], random.random()),
-        reverse=True
-    )
+    sorted_wildcards = rank_wildcards(third_place_pool)
     
     print("\n=========================================================================")
     print("            LIVE 3RD-PLACE WILDCARD LEADERBOARD (GD PROXY)               ")
@@ -378,3 +368,121 @@ def simulate_group_stage_and_show_wildcards(groups_path="data/groups.json", fixt
         print(f"#{rank:<4} | Group {entry['group']:<1} | {entry['team']:<22} | {entry['points']:<6} | {entry['gd']:<4} | {status:<12}")
         
     print("=========================================================================\n")
+
+def calculate_full_tournament_matrix(iterations=5000, groups_path="data/groups.json", fixtures_path="data/fixtures.json", lookup_path="data/lookup_table.json", teams_path="data/teams.json"):
+    """
+    Runs full Monte Carlo tournament loops using the official 48-team FIFA 
+    knockout bracket layout template. Tracks realistic progressive milestones.
+    """
+    groups, fixtures, lookup_table, teams_elo = load_simulation_data(groups_path, fixtures_path, lookup_path, teams_path)
+    
+    # Initialize matrix tracking for all 48 teams
+    stages = ["Top Group", "L32", "L16", "QF", "SF", "FINAL", "CHAMPION"]
+    matrix = {team: {stage: 0 for stage in stages} for group in groups for team in group["teams"]}
+    
+    print(f"🏆 Running {iterations:,} official FIFA tournament brackets to map all stage vectors...")
+    
+    for iteration in range(iterations):
+        if (iteration + 1) % 1000 == 0:
+            print(f"   ⏳ Completed {iteration + 1:,} simulations...")
+            
+        winners = {}
+        runners_up = {}
+        third_place_pool = []
+        
+        # 1. Simulate Group Stage
+        for group in groups:
+            letter = group["name"].upper()
+            group_fixtures = get_group_fixtures(fixtures, letter)
+            standings = simulate_single_group_stage(group["teams"], group_fixtures, lookup_table, teams_elo)
+            
+            # Record who won their group
+            matrix[standings[0][0]]["Top Group"] += 1
+            
+            winners[letter] = standings[0][0]
+            runners_up[letter] = standings[1][0]
+            
+            third_team, third_pts, third_gd = standings[2]
+            third_place_pool.append({
+                "team": third_team, 
+                "group": letter, 
+                "points": third_pts, 
+                "gd": third_gd
+            })
+            
+        # 2. Extract Top 8 Wildcards
+        sorted_wildcards = rank_wildcards(third_place_pool)
+        w = [item["team"] for item in sorted_wildcards[:8]]
+        
+        # 3. Construct the Rigid 32-Team Knockout Tree
+        # Even indices (0, 2, 4...) play odd indices (1, 3, 5...).
+        # Spaced symmetrically so Group Winners play Wildcards or opposite Runners-up.
+        r32_teams = [
+            winners["A"], w[0],             # Match 1: Winner A vs Wildcard 1
+            winners["B"], runners_up["C"],   # Match 2: Winner B vs Runner-up C
+            winners["C"], w[1],             # Match 3: Winner C vs Wildcard 2
+            winners["D"], runners_up["A"],   # Match 4: Winner D vs Runner-up A
+            winners["E"], w[2],             # Match 5: Winner E vs Wildcard 3
+            winners["F"], runners_up["G"],   # Match 6: Winner F vs Runner-up G
+            winners["G"], w[3],             # Match 7: Winner G vs Wildcard 4
+            winners["H"], runners_up["E"],   # Match 8: Winner H vs Runner-up E
+            
+            winners["I"], w[4],             # Match 9: Winner I vs Wildcard 5
+            winners["J"], runners_up["K"],   # Match 10: Winner J vs Runner-up K
+            winners["K"], w[5],             # Match 11: Winner K vs Wildcard 6
+            winners["L"], runners_up["I"],   # Match 12: Winner L vs Runner-up I
+            winners["M"] if "M" in winners else runners_up["B"], w[6], # Match 13 (Accounts for potential extra groups)
+            winners["N"] if "N" in winners else runners_up["D"], runners_up["F"], # Match 14
+            runners_up["H"], w[7],           # Match 15: Runner-up H vs Wildcard 8
+            runners_up["J"], runners_up["L"] # Match 16: Runner-up J vs Runner-up L
+        ]
+        
+        # Strip out any edge case Nones if your setup uses exactly 12 groups (A-L)
+        r32_teams = [t for t in r32_teams if t is not None]
+        
+        # Pad up to 32 if group count variation left empty slots
+        while len(r32_teams) < 32:
+            r32_teams.append(w[-1]) # Fallback placeholder safety net
+            
+        # Record all teams that successfully made it into the Round of 32
+        for team in r32_teams:
+            matrix[team]["L32"] += 1
+            
+        # 4. Knockout Stages Tree Progression
+        current_round = r32_teams
+        ko_progressions = [
+            ("L32_matches", "L16"),
+            ("L16_matches", "QF"),
+            ("QF_matches",  "SF"),
+            ("SF_matches",  "FINAL"),
+            ("FINAL_match", "CHAMPION")
+        ]
+        
+        for round_name, milestone in ko_progressions:
+            next_round = []
+            for i in range(0, len(current_round), 2):
+                t1, t2 = current_round[i], current_round[i+1]
+                
+                # Simulate core game match results
+                res = simulate_match(t1, t2, lookup_table, is_knockout=True)
+                
+                # CHAOS VARIABLE: If the simulator returns a draw in knockouts, 
+                # introduce the 50/50 penalty shootout lottery to nerf heavyweights.
+                if res.get("outcome") == "draw" or res["winner"] is None:
+                    winner = random.choice([t1, t2])
+                else:
+                    winner = res["winner"]
+                    
+                next_round.append(winner)
+                
+                # Milestone awarded ONLY to the team that won and advanced!
+                matrix[winner][milestone] += 1
+                
+            current_round = next_round
+
+    # Convert absolute counts to final baseline percentages
+    for team in matrix:
+        for stage in stages:
+            matrix[team][stage] = (matrix[team][stage] / iterations) * 100
+            
+    return matrix

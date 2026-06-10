@@ -161,6 +161,37 @@ def handle_champion(args):
         
     print("=======================================================\n")
 
+def handle_tournament_matrix(args):
+    """Handler executed when running: python main.py matrix"""
+    from logic.groups import calculate_full_tournament_matrix
+    
+    results = calculate_full_tournament_matrix(iterations=args.iterations)
+    
+    # Sort teams by championship odds descending, then final odds, then L32 odds
+    sorted_teams = sorted(
+        results.items(), 
+        key=lambda x: (x[1]["CHAMPION"], x[1]["FINAL"], x[1]["SF"], x[1]["L32"]), 
+        reverse=True
+    )
+    
+    print("\n=========================================================================================")
+    print("                      GLOBAL TOURNAMENT PROGRESSION PROBABILITY MATRIX                     ")
+    print("=========================================================================================")
+    print(f"{'Team':<22} | {'Top Grp':<7} | {'L32':<7} | {'L16':<7} | {'QF':<7} | {'SF':<7} | {'Final':<7} | {'Champ':<7}")
+    print("-" * 89)
+    
+    for team, stages in sorted_teams:
+        print(f"{team:<22} | "
+              f"{stages['Top Group']:>6.1f}% | "
+              f"{stages['L32']:>6.1f}% | "
+              f"{stages['L16']:>6.1f}% | "
+              f"{stages['QF']:>6.1f}% | "
+              f"{stages['SF']:>6.1f}% | "
+              f"{stages['FINAL']:>6.1f}% | "
+              f"{stages['CHAMPION']:>6.1f}%")
+              
+    print("=========================================================================================\n")
+
 
 # ==============================================================================
 # MAIN ROUTINE RUNNER (ARGPARSE SUBCOMMAND TREE INTERFACE)
@@ -203,6 +234,11 @@ def main():
     parser_champion = subparsers.add_parser("champion", help="Simulate the entire tournament to find title probabilities")
     parser_champion.add_argument("--iterations", type=int, default=5000, help="Number of global tournaments to test (default: 5,000)")
     parser_champion.set_defaults(func=handle_champion)
+
+    # Command: matrix
+    parser_matrix = subparsers.add_parser("matrix", help="Calculate full stage-by-stage progression probabilities for all teams")
+    parser_matrix.add_argument("--iterations", type=int, default=5000, help="Number of full tournaments to run (default: 5,000)")
+    parser_matrix.set_defaults(func=handle_tournament_matrix)
 
     # Parse arguments and map to default actions
     args = parser.parse_args()
