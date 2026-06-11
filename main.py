@@ -192,6 +192,21 @@ def handle_tournament_matrix(args):
               
     print("=========================================================================================\n")
 
+def handle_top_6_distribution(args):
+    """Handler executed when running: python main.py distribution"""
+    # Import the function from groups.py (assuming logic/groups.py or wherever groups.py sits)
+    # Adjust this import path if your file structure is different!
+    from logic.groups import analyze_top_6_semifinal_distribution
+    
+    # Run the simulation with paths defined in your environment or fallbacks
+    analyze_top_6_semifinal_distribution(
+        iterations=args.iterations,
+        groups_path="data/groups.json",
+        fixtures_path="data/fixtures.json",
+        lookup_path="data/lookup_table.json",
+        teams_path="data/teams.json"
+    )
+
 
 # ==============================================================================
 # MAIN ROUTINE RUNNER (ARGPARSE SUBCOMMAND TREE INTERFACE)
@@ -239,6 +254,19 @@ def main():
     parser_matrix = subparsers.add_parser("matrix", help="Calculate full stage-by-stage progression probabilities for all teams")
     parser_matrix.add_argument("--iterations", type=int, default=5000, help="Number of full tournaments to run (default: 5,000)")
     parser_matrix.set_defaults(func=handle_tournament_matrix)
+
+    # Command: distribution
+    parser_dist = subparsers.add_parser(
+        "distribution", 
+        help="Calculate exact probability distribution of top-6 teams reaching the Semi-Finals"
+    )
+    parser_dist.add_argument(
+        "--iterations", 
+        type=int, 
+        default=5000, 
+        help="Number of global brackets to run (default: 5,000)"
+    )
+    parser_dist.set_defaults(func=handle_top_6_distribution)
 
     # Parse arguments and map to default actions
     args = parser.parse_args()

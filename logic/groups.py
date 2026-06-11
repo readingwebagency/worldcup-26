@@ -486,3 +486,112 @@ def calculate_full_tournament_matrix(iterations=5000, groups_path="data/groups.j
             matrix[team][stage] = (matrix[team][stage] / iterations) * 100
             
     return matrix
+
+
+def analyze_top_6_semifinal_distribution(iterations=5000, groups_path="data/groups.json", fixtures_path="data/fixtures.json", lookup_path="data/lookup_table.json", teams_path="data/teams.json"):
+    """
+    Runs the Monte Carlo simulation and calculates the exact probability distribution
+    of how many top-6 teams reach the Semi-Finals simultaneously.
+    """
+    groups, fixtures, lookup_table, teams_elo = load_simulation_data(groups_path, fixtures_path, lookup_path, teams_path)
+    
+    # Define target teams to analyze
+    top_6_teams = {"Spain", "Argentina", "France", "Brazil", "England", "Mexico"}
+    
+    # Dictionary to keep track of how many top-6 teams make it to the SF in each run
+    # Possible counts are 0, 1, 2, 3, or 4 (since there are only 4 SF slots)
+    count_distribution = {0: 0, 1: 0, 2: 0, 3: 0, 4: 0}
+    
+    print(f"🎲 Simulating {iterations:,} tournaments to calculate top-6 distribution matrix...")
+    
+    for iteration in range(iterations):
+        winners = {}
+        runners_up = {}
+        third_place_pool = []
+        
+        # 1. Group Stage
+        for group in groups:
+            letter = group["name"].upper()
+            group_fixtures = get_group_fixtures(fixtures, letter)
+            standings = simulate_single_group_stage(group["teams"], group_fixtures, lookup_table, teams_elo)
+            
+            winners[letter] = standings[0][0]
+            runners_up[letter] = standings[1][0]
+            third_place_pool.append({"team": standings[2][0], "group": letter, "points": standings[2][1], "gd": standings[2][2]})
+            
+        # 2. Wildcards & R32 Bracket Setup
+        sorted_wildcards = rank_wildcards(third_place_pool)
+        w = [item["team"] for item in sorted_wildcards[:8]]
+        
+        r32_teams = [
+            winners["A"], w[0], winners["B"], runners_up["C"],   
+            winners["C"], w[1], winners["D"], runners_up["A"],   
+            winners["E"], w[2], winners["F"], runners_up["G"],   
+            winners["G"], w[3], winners["H"], runners_up["E"],   
+            winners["I"], w[4], winners["J"], runners_up["K"],   
+            winners["K"], w[5], winners["L"], runners_up["I"],   
+            winners["M"] if "M" in winners else runners_up["B"], w[6], 
+            winners["N"] if "N" in winners else runners_up["D"], runners_up["F"], 
+            runners_up["H"], w[7], runners_up["J"], runners_up["L"] 
+        ]
+        r32_teams = [t for t in r32_teams if t is not None]
+        while len(r32_teams) < 32:
+            r32_teams.append(w[-1]) 
+            
+        # 3. Knockout Progression
+        current_round = r32_teams
+        ko_progressions = ["L16", "QF", "SF", "FINAL", "CHAMPION"] # Mapped to milestones
+        
+        # We manually step down the bracket levels to track the exact SF bracket
+        # Step 1: R32 -> R16
+        r16 = []
+        for i in range(0, len(current_round), 2):
+            res = simulate_match(current_round[i], current_round[i+1], lookup_table, is_knockout=True)
+            winner = random.choice([current_round[i], current_round[i+1]]) if (res.get("outcome") == "draw" or res["winner"] is None) else res["winner"]
+            r16.append(winner)
+            
+        # Step 2: R16 -> QF
+        qf = []
+        for i in range(0, len(r16), 2):
+            res = simulate_match(r16[i], r16[i+1], lookup_table, is_knockout=True)
+            winner = random.choice([r16[i], r16[i+1]]) if (res.get("outcome") == "draw" or res["winner"] is None) else res["winner"]
+            qf.append(winner)
+            
+        # Step 3: QF -> SF (This yields the 4 Semi-Finalists!)
+        semi_finalists = []
+        for i in range(0, len(qf), 2):
+            res = simulate_match(qf[i], qf[i+1], lookup_table, is_knockout=True)
+            winner = random.choice([qf[i], qf[i+1]]) if (res.get("outcome") == "draw" or res["winner"] is None) else res["winner"]
+            semi_finalists.append(winner)
+            
+        # === ANALYSIS SNAPSHOT ===
+        # Count exactly how many of our top 6 teams are inside the 4 semi-final slots
+        match_count = sum(1 for team in semi_finalists if team in top_6_teams)
+        
+        # Log it in our distribution dictionary
+        count_distribution[match_count] += 1
+
+    # 4. Calculate final percentages and display results
+    print("\n" + "="*65)
+    print("📊 MONTE CARLO ANALYSIS: TOP 6 SEMI-FINAL DISTRIBUTION")
+    print("="*65)
+    
+    for count in sorted(count_distribution.keys()):
+        percentage = (count_distribution[count] / iterations) * 100
+        
+        if count == 0:
+            label = "❌ Zero top-6 teams make it (All-Underdog Semi-Finals)"
+        elif count == 1:
+            label = "🎯 Exactly ONE top-6 team reaches the Semi-Finals"
+        elif count == 2:
+            label = "👥 Exactly TWO top-6 teams reach the Semi-Finals"
+        elif count == 3:
+            label = "👑 Exactly THREE top-6 teams reach the Semi-Finals"
+        elif count == 4:
+            label = "🚨 All FOUR Semi-Finalists are from the top-6"
+            
+        print(f"{label:<52} : {percentage:.2f}%")
+        
+    print("="*65 + "\n")
+    
+    return count_distribution
